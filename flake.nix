@@ -29,6 +29,20 @@
           buildInputs = [
             zig
             zls
+            # SDL2 system dependencies
+            pkgs.xorg.libX11
+            pkgs.xorg.libXext
+            pkgs.xorg.libXrandr
+            pkgs.xorg.libXcursor
+            pkgs.xorg.libXfixes
+            pkgs.xorg.libXi
+            pkgs.xorg.libXScrnSaver
+            pkgs.SDL2
+            pkgs.libGL
+            pkgs.libpulseaudio
+            pkgs.libxkbcommon
+            pkgs.wayland
+            pkgs.pkg-config
           ];
 
           shellHook = ''
