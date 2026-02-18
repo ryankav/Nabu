@@ -1,7 +1,7 @@
 const std = @import("std");
 const Io = std.Io;
 const av = @import("av");
-const PacketQueue = @import("packet_queue.zig").PacketQueue;
+const PacketQueue = @import("packet_queue.zig").PacketQueue(256);
 const FrameQueue = @import("frame_queue.zig").FrameQueue;
 
 /// Per-stream decoder thread: reads packets → sends to codec → pushes decoded frames.

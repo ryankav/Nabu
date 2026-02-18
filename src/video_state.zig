@@ -4,7 +4,7 @@ const av = @import("av");
 const platform = @import("platform.zig");
 const build_options = @import("build_options");
 const pl = platform.getPlatform(build_options.backend);
-const PacketQueue = @import("packet_queue.zig").PacketQueue;
+const PacketQueue = @import("packet_queue.zig").PacketQueue(256);
 const FrameQueue = @import("frame_queue.zig").FrameQueue;
 const Decoder = @import("decoder.zig").Decoder;
 const Clock = @import("clock.zig").Clock;
@@ -88,8 +88,8 @@ pub const VideoState = struct {
             .allocator = allocator,
             .io = io,
             .fmt_ctx = fmt_ctx,
-            .video_pkt_queue = PacketQueue.init(allocator),
-            .audio_pkt_queue = PacketQueue.init(allocator),
+            .video_pkt_queue = .{},
+            .audio_pkt_queue = .{},
             .video_frame_queue = undefined,
             .audio_frame_queue = undefined,
             .video_clock = undefined,
@@ -268,12 +268,6 @@ pub const VideoState = struct {
                 self.seek_request.store(false, .release);
             }
 
-            // Check if queues are full (avoid buffering too much)
-            if (self.video_pkt_queue.nb_packets > 25 or self.audio_pkt_queue.nb_packets > 25) {
-                pl.delay(10);
-                continue;
-            }
-
             // Read a packet
             const pkt = av.Packet.alloc() catch continue;
 
@@ -292,17 +286,22 @@ pub const VideoState = struct {
                 }
             };
 
-            // Route packet to appropriate queue
-            if (pkt.stream_index == self.video_stream_idx) {
-                self.video_pkt_queue.put(self.io, pkt) catch {
-                    pkt.unref();
-                    pkt.free();
-                };
-            } else if (pkt.stream_index == self.audio_stream_idx) {
-                self.audio_pkt_queue.put(self.io, pkt) catch {
-                    pkt.unref();
-                    pkt.free();
-                };
+            // Route packet to appropriate queue.
+            // Sleep and retry on Full so the ring buffer capacity is the sole
+            // backpressure gate — no separate byte-budget check needed.
+            const queue: ?*PacketQueue =
+                if (pkt.stream_index == self.video_stream_idx) &self.video_pkt_queue
+                else if (pkt.stream_index == self.audio_stream_idx) &self.audio_pkt_queue
+                else null;
+
+            if (queue) |q| {
+                put_loop: while (true) {
+                    q.put(self.io, pkt) catch |err| switch (err) {
+                        error.Aborted => { pkt.unref(); pkt.free(); break :put_loop; },
+                        error.Full => { pl.delay(10); continue :put_loop; },
+                    };
+                    break :put_loop;
+                }
             } else {
                 pkt.unref();
                 pkt.free();
