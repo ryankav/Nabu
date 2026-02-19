@@ -1,21 +1,19 @@
 const std = @import("std");
 const Io = std.Io;
 const av = @import("av");
+const BoundedSyncQueue = @import("sync_queue.zig").BoundedSyncQueue;
 
 /// Thread-safe FIFO queue for compressed packets backed by a fixed ring buffer.
 /// Mirrors ffplay's PacketQueue.
 pub fn PacketQueue(comptime capacity: usize) type {
     comptime std.debug.assert(std.math.isPowerOfTwo(capacity));
-    const mask = capacity - 1;
 
     return struct {
         const Self = @This();
         const Entry = struct { pkt: *av.Packet, serial: i32 };
+        const Ring = BoundedSyncQueue(Entry, capacity);
 
-        buf: [capacity]Entry = undefined,
-        rindex: usize = 0,
-        windex: usize = 0,
-        nb_packets: u32 = 0,
+        ring: Ring = .{},
         size: usize = 0,
         duration: i64 = 0,
         serial: i32 = 0,
@@ -41,10 +39,7 @@ pub fn PacketQueue(comptime capacity: usize) type {
             self.mutex.lockUncancelable(io);
             defer self.mutex.unlock(io);
             if (self.abort_request) return error.Aborted;
-            if (self.nb_packets >= capacity) return error.Full;
-            self.buf[self.windex & mask] = .{ .pkt = pkt, .serial = self.serial };
-            self.windex += 1;
-            self.nb_packets += 1;
+            try self.ring.putLocked(.{ .pkt = pkt, .serial = self.serial });
             self.size += @intCast(pkt.size);
             self.duration += pkt.duration;
             self.cond.signal(io);
@@ -55,10 +50,7 @@ pub fn PacketQueue(comptime capacity: usize) type {
             defer self.mutex.unlock(io);
             while (true) {
                 if (self.abort_request) return error.Aborted;
-                if (self.nb_packets > 0) {
-                    const entry = self.buf[self.rindex & mask];
-                    self.rindex += 1;
-                    self.nb_packets -= 1;
+                if (self.ring.getLocked()) |entry| {
                     self.size -= @intCast(entry.pkt.size);
                     self.duration -= entry.pkt.duration;
                     return .{ entry.pkt, entry.serial };
@@ -73,14 +65,10 @@ pub fn PacketQueue(comptime capacity: usize) type {
         pub fn flush(self: *Self, io: Io) void {
             self.mutex.lockUncancelable(io);
             defer self.mutex.unlock(io);
-            while (self.nb_packets > 0) {
-                const entry = self.buf[self.rindex & mask];
-                self.rindex += 1;
-                self.nb_packets -= 1;
+            while (self.ring.getLocked()) |entry| {
                 entry.pkt.unref();
                 entry.pkt.free();
             }
-            self.windex = self.rindex;
             self.size = 0;
             self.duration = 0;
             self.serial += 1;

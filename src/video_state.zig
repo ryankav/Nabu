@@ -134,8 +134,8 @@ pub const VideoState = struct {
         self.audio_clock = Clock.init(&self.audio_pkt_queue.serial);
 
         // Initialize frame queues with pointer to our abort_request
-        self.video_frame_queue = try FrameQueue.init(FrameQueue.QUEUE_SIZE, &self.abort_request);
-        self.audio_frame_queue = try FrameQueue.init(FrameQueue.QUEUE_SIZE, &self.abort_request);
+        self.video_frame_queue = try FrameQueue.init(&self.abort_request);
+        self.audio_frame_queue = try FrameQueue.init(&self.abort_request);
 
         // Set up video decoder
         if (self.video_stream_idx >= 0) {
