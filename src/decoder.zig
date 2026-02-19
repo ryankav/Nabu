@@ -52,7 +52,6 @@ pub const Decoder = struct {
             const result = self.pkt_queue.get(self.io, true) catch |err| {
                 switch (err) {
                     error.Aborted => break,
-                    else => continue,
                 }
             };
             const pkt = result[0];

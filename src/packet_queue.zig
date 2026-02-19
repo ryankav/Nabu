@@ -17,39 +17,43 @@ pub fn PacketQueue(comptime capacity: usize) type {
         size: usize = 0,
         duration: i64 = 0,
         serial: i32 = 0,
-        abort_request: bool = true,
+        abort_request: std.atomic.Value(bool) = std.atomic.Value(bool).init(true),
         mutex: Io.Mutex = .init,
         cond: Io.Condition = .init,
 
         pub fn start(self: *Self, io: Io) void {
             self.mutex.lockUncancelable(io);
             defer self.mutex.unlock(io);
-            self.abort_request = false;
+            self.abort_request.store(false, .release);
             self.serial += 1;
         }
 
         pub fn abort(self: *Self, io: Io) void {
             self.mutex.lockUncancelable(io);
             defer self.mutex.unlock(io);
-            self.abort_request = true;
+            self.abort_request.store(true, .release);
             self.cond.broadcast(io);
         }
 
         pub fn put(self: *Self, io: Io, pkt: *av.Packet) error{ Aborted, Full }!void {
             self.mutex.lockUncancelable(io);
             defer self.mutex.unlock(io);
-            if (self.abort_request) return error.Aborted;
+            if (self.abort_request.load(.acquire)) return error.Aborted;
             try self.ring.putLocked(.{ .pkt = pkt, .serial = self.serial });
             self.size += @intCast(pkt.size);
             self.duration += pkt.duration;
             self.cond.signal(io);
         }
 
-        pub fn get(self: *Self, io: Io, block: bool) error{ Aborted, WouldBlock }!struct { *av.Packet, i32 } {
+        pub fn get(
+            self: *Self,
+            io: Io,
+            comptime block: bool,
+        ) (if (block) error{Aborted} else error{ Aborted, WouldBlock })!struct { *av.Packet, i32 } {
             self.mutex.lockUncancelable(io);
             defer self.mutex.unlock(io);
             while (true) {
-                if (self.abort_request) return error.Aborted;
+                if (self.abort_request.load(.acquire)) return error.Aborted;
                 if (self.ring.getLocked()) |entry| {
                     self.size -= @intCast(entry.pkt.size);
                     self.duration -= entry.pkt.duration;
