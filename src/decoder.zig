@@ -3,6 +3,7 @@ const Io = std.Io;
 const av = @import("av");
 const PacketQueue = @import("packet_queue.zig").PacketQueue(256);
 const FrameQueue = @import("frame_queue.zig").FrameQueue;
+const av_math = @import("av_math.zig");
 
 /// Per-stream decoder thread: reads packets → sends to codec → pushes decoded frames.
 pub const Decoder = struct {
@@ -94,14 +95,15 @@ pub const Decoder = struct {
 
             // Compute PTS in seconds
             const frame = entry.frame;
+            const tb = self.time_base.q2d();
             if (frame.pts != av.NOPTS_VALUE) {
-                entry.pts = @as(f64, @floatFromInt(frame.pts)) * self.time_base.q2d();
+                entry.pts = av_math.ptsToSeconds(frame.pts, tb);
             } else {
                 entry.pts = 0;
             }
 
             if (frame.duration > 0) {
-                entry.duration = @as(f64, @floatFromInt(frame.duration)) * self.time_base.q2d();
+                entry.duration = av_math.ptsToSeconds(frame.duration, tb);
             } else {
                 entry.duration = 0;
             }

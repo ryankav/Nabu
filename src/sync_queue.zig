@@ -1,4 +1,5 @@
 const std = @import("std");
+const testing = std.testing;
 
 /// Lock-free ring buffer mechanics, intended to be used inside an externally-locked scope.
 /// All methods must be called while holding the caller's external lock.
@@ -88,4 +89,114 @@ pub fn BoundedSyncQueue(comptime T: type, comptime capacity: usize) type {
             self.count -= 1;
         }
     };
+}
+
+// ── Tests ────────────────────────────────────────────────────────────────────
+
+test "BoundedSyncQueue: starts empty" {
+    var q: BoundedSyncQueue(u32, 4) = .{};
+    try testing.expect(q.isEmpty());
+    try testing.expect(!q.isFull());
+    try testing.expectEqual(@as(usize, 0), q.count);
+}
+
+test "BoundedSyncQueue: put and get round-trip" {
+    var q: BoundedSyncQueue(u32, 4) = .{};
+    try q.putLocked(42);
+    try testing.expectEqual(@as(usize, 1), q.count);
+    try testing.expect(!q.isEmpty());
+    try testing.expectEqual(@as(?u32, 42), q.getLocked());
+    try testing.expect(q.isEmpty());
+}
+
+test "BoundedSyncQueue: FIFO ordering" {
+    var q: BoundedSyncQueue(u32, 4) = .{};
+    try q.putLocked(1);
+    try q.putLocked(2);
+    try q.putLocked(3);
+    try testing.expectEqual(@as(?u32, 1), q.getLocked());
+    try testing.expectEqual(@as(?u32, 2), q.getLocked());
+    try testing.expectEqual(@as(?u32, 3), q.getLocked());
+    try testing.expect(q.isEmpty());
+}
+
+test "BoundedSyncQueue: returns error.Full at capacity" {
+    var q: BoundedSyncQueue(u32, 2) = .{};
+    try q.putLocked(1);
+    try q.putLocked(2);
+    try testing.expect(q.isFull());
+    try testing.expectError(error.Full, q.putLocked(3));
+}
+
+test "BoundedSyncQueue: getLocked returns null when empty" {
+    var q: BoundedSyncQueue(u32, 4) = .{};
+    try testing.expectEqual(@as(?u32, null), q.getLocked());
+}
+
+test "BoundedSyncQueue: indices wrap correctly after fill-drain cycle" {
+    var q: BoundedSyncQueue(u32, 4) = .{};
+    // First cycle: fill then drain (indices advance to 4)
+    for (0..4) |i| try q.putLocked(@intCast(i));
+    for (0..4) |_| _ = q.getLocked();
+    try testing.expect(q.isEmpty());
+    try testing.expectEqual(@as(usize, 4), q.rindex);
+    try testing.expectEqual(@as(usize, 4), q.windex);
+    // Second cycle: buffer slots are reused via the mask
+    for (10..14) |i| try q.putLocked(@intCast(i));
+    try testing.expectEqual(@as(?u32, 10), q.getLocked());
+    try testing.expectEqual(@as(?u32, 11), q.getLocked());
+    try testing.expectEqual(@as(?u32, 12), q.getLocked());
+    try testing.expectEqual(@as(?u32, 13), q.getLocked());
+    try testing.expect(q.isEmpty());
+}
+
+test "BoundedSyncQueue: pointer-based write API" {
+    var q: BoundedSyncQueue(u32, 4) = .{};
+    const slot = q.peekWriteLocked() orelse return error.TestUnexpectedNull;
+    slot.* = 99;
+    q.advanceWriteLocked();
+    try testing.expectEqual(@as(usize, 1), q.count);
+    try testing.expectEqual(@as(?u32, 99), q.getLocked());
+}
+
+test "BoundedSyncQueue: pointer-based read API" {
+    var q: BoundedSyncQueue(u32, 4) = .{};
+    try q.putLocked(10);
+    try q.putLocked(20);
+
+    const front = q.peekReadLocked() orelse return error.TestUnexpectedNull;
+    try testing.expectEqual(@as(u32, 10), front.*);
+    // Peek does not consume.
+    try testing.expectEqual(@as(usize, 2), q.count);
+
+    q.advanceReadLocked();
+    try testing.expectEqual(@as(usize, 1), q.count);
+
+    const next = q.peekReadLocked() orelse return error.TestUnexpectedNull;
+    try testing.expectEqual(@as(u32, 20), next.*);
+}
+
+test "BoundedSyncQueue: peekReadAtLocked" {
+    var q: BoundedSyncQueue(u32, 4) = .{};
+    try q.putLocked(1);
+    try q.putLocked(2);
+    try q.putLocked(3);
+
+    try testing.expectEqual(@as(u32, 1), (q.peekReadAtLocked(0) orelse return error.TestUnexpectedNull).*);
+    try testing.expectEqual(@as(u32, 2), (q.peekReadAtLocked(1) orelse return error.TestUnexpectedNull).*);
+    try testing.expectEqual(@as(u32, 3), (q.peekReadAtLocked(2) orelse return error.TestUnexpectedNull).*);
+    // One past the last element returns null.
+    try testing.expectEqual(@as(?*u32, null), q.peekReadAtLocked(3));
+}
+
+test "BoundedSyncQueue: peekWriteLocked returns null when full" {
+    var q: BoundedSyncQueue(u32, 2) = .{};
+    try q.putLocked(1);
+    try q.putLocked(2);
+    try testing.expectEqual(@as(?*u32, null), q.peekWriteLocked());
+}
+
+test "BoundedSyncQueue: peekReadLocked returns null when empty" {
+    var q: BoundedSyncQueue(u32, 4) = .{};
+    try testing.expectEqual(@as(?*u32, null), q.peekReadLocked());
 }

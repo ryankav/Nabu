@@ -6,6 +6,7 @@ const build_options = @import("build_options");
 const pl = platform.getPlatform(build_options.backend);
 const Clock = @import("clock.zig").Clock;
 const FrameQueue = @import("frame_queue.zig").FrameQueue;
+const av_math = @import("av_math.zig");
 
 /// Video display: frame timing and texture upload.
 pub const VideoDisplay = struct {
@@ -28,11 +29,7 @@ pub const VideoDisplay = struct {
     width: c_int,
     height: c_int,
 
-    // Thresholds from ffplay
-    const AV_SYNC_THRESHOLD_MIN = 0.04; // 40ms
-    const AV_SYNC_THRESHOLD_MAX = 0.1; // 100ms
-    const AV_SYNC_FRAMEDUP_THRESHOLD = 0.1;
-    const AV_NOSYNC_THRESHOLD = 10.0;
+    // A/V sync thresholds — sourced from av_math to keep them in one place.
 
     pub fn init(
         frame_queue: *FrameQueue,
@@ -82,7 +79,7 @@ pub const VideoDisplay = struct {
 
         self.frame_timer += delay;
         // If we're behind by more than AV_SYNC_THRESHOLD_MAX, reset timer
-        if (time - self.frame_timer > AV_SYNC_THRESHOLD_MAX) {
+        if (time - self.frame_timer > av_math.AV_SYNC_THRESHOLD_MAX) {
             self.frame_timer = time;
         }
 
@@ -124,24 +121,7 @@ pub const VideoDisplay = struct {
 
         // A/V sync against audio master clock
         const diff = entry.pts - self.audio_clock.get();
-
-        // Adjust delay based on A/V difference
-        const sync_threshold = @max(AV_SYNC_THRESHOLD_MIN, @min(AV_SYNC_THRESHOLD_MAX, delay));
-
-        if (@abs(diff) < AV_NOSYNC_THRESHOLD) {
-            if (diff <= -sync_threshold) {
-                // Video is behind audio: speed up (reduce delay)
-                delay = @max(0, delay + diff);
-            } else if (diff >= sync_threshold and delay > AV_SYNC_FRAMEDUP_THRESHOLD) {
-                // Video is ahead: slow down
-                delay = delay + diff;
-            } else if (diff >= sync_threshold) {
-                // Video is slightly ahead: double the delay
-                delay = 2.0 * delay;
-            }
-        }
-
-        return delay;
+        return av_math.adjustDelay(delay, diff);
     }
 
     fn uploadFrame(self: *VideoDisplay, frame: *av.Frame, texture: platform.Texture) void {
